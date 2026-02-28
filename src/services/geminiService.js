@@ -3,7 +3,7 @@
  * Handles communication with Google's Gemini API via REST
  */
 
-const GEMINI_API_KEY = 'AIzaSyAfyIK5lscHhD4_tjcgEPKv-2TCgJWrpyk';
+const GEMINI_API_KEY = 'AIzaSyAVW5CZbi1gorJodElbTGclo4mWA9XYpzM';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 class GeminiService {
@@ -13,7 +13,7 @@ class GeminiService {
   }
 
   /**
-   * Generate content with tools
+   * Generate content (no tools - chat only)
    */
   async generateContent(prompt, tools = [], conversationHistory = []) {
     try {
@@ -26,8 +26,7 @@ class GeminiService {
           topP: 0.95,
           topK: 40,
           maxOutputTokens: 4096,
-        },
-        tools: tools.length > 0 ? this.buildTools(tools) : []
+        }
       };
 
       const response = await fetch(
@@ -76,23 +75,6 @@ class GeminiService {
   }
 
   /**
-   * Build tools for Gemini
-   */
-  buildTools(tools) {
-    return [{
-      functionDeclarations: tools.map(tool => ({
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters || {
-          type: 'object',
-          properties: {},
-          required: []
-        }
-      }))
-    }];
-  }
-
-  /**
    * Parse API response
    */
   parseResponse(data) {
@@ -106,17 +88,10 @@ class GeminiService {
       functionCalls: []
     };
 
-    // Check for text content
     if (candidate.content?.parts) {
       candidate.content.parts.forEach(part => {
         if (part.text) {
           result.content += part.text;
-        }
-        if (part.functionCall) {
-          result.functionCalls.push({
-            name: part.functionCall.name,
-            arguments: part.functionCall.args || {}
-          });
         }
       });
     }

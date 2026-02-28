@@ -9,7 +9,7 @@ const ZAI_BASE_URL = 'https://api.z.ai/v1';
 class ZAIService {
   constructor(apiKey = ZAI_API_KEY) {
     this.apiKey = apiKey;
-    this.model = 'default';
+    this.model = 'minimax/minimax-m2.5:free';
   }
 
   /**
@@ -30,14 +30,16 @@ class ZAIService {
         model: this.model,
         messages: messages,
         temperature: 0.7,
-        max_tokens: 4096,
-        tools: tools.length > 0 ? this.buildTools(tools) : undefined
+        max_tokens: 4096
       };
 
-      // Remove undefined values
-      Object.keys(requestBody).forEach(key => 
-        requestBody[key] === undefined && delete requestBody[key]
-      );
+      // Add tools if available
+      if (tools.length > 0) {
+        requestBody.tools = this.buildTools(tools);
+        requestBody.tool_choice = "auto";
+      }
+
+      console.log('Z.AI Request:', JSON.stringify(requestBody, null, 2));
 
       const response = await fetch(
         `${ZAI_BASE_URL}/chat/completions`,
@@ -52,11 +54,18 @@ class ZAIService {
       );
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error?.message || 'API request failed');
+        const errorText = await response.text();
+        console.error('Z.AI Error Response:', errorText);
+        try {
+          const error = JSON.parse(errorText);
+          throw new Error(error.error?.message || error.message || 'API request failed');
+        } catch (e) {
+          throw new Error(errorText || 'API request failed');
+        }
       }
 
       const data = await response.json();
+      console.log('Z.AI Response:', JSON.stringify(data, null, 2));
       return this.parseResponse(data);
     } catch (error) {
       console.error('Z.AI API Error:', error);
@@ -73,15 +82,17 @@ class ZAIService {
     // System prompt
     messages.push({
       role: 'system',
-      content: 'You are an AI assistant with access to Model Context Protocol (MCP) tools. When the user asks to use a tool, use the function calling feature to execute it. Otherwise, respond conversationally.'
+      content: 'You are an AI assistant. When asked to use a tool, use the function calling feature. Otherwise, respond conversationally in Spanish or English.'
     });
 
     // History
     history.forEach(msg => {
-      messages.push({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content
-      });
+      if (msg.content) {
+        messages.push({
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.content
+        });
+      }
     });
 
     // Current prompt
@@ -129,9 +140,18 @@ class ZAIService {
     // Check for function calls
     if (message.tool_calls && message.tool_calls.length > 0) {
       message.tool_calls.forEach(call => {
+        let args = {};
+        try {
+          args = typeof call.function.arguments === 'string' 
+            ? JSON.parse(call.function.arguments) 
+            : call.function.arguments;
+        } catch (e) {
+          console.error('Failed to parse function arguments:', e);
+        }
+        
         result.functionCalls.push({
           name: call.function.name,
-          arguments: JSON.parse(call.function.arguments || '{}')
+          arguments: args
         });
       });
     }
