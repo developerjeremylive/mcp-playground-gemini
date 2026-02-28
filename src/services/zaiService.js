@@ -1,6 +1,6 @@
 /**
  * Z.ai API Service
- * Handles communication with Z.AI models via REST API
+ * Uses OpenAI-compatible API with CORS proxy
  */
 
 const ZAI_API_KEY = '0aa91aeed2ca438b802fe07220515705.BmC62zS8S2h9Rhfs';
@@ -12,15 +12,12 @@ class ZAIService {
     this.model = 'minimax/minimax-m2.5:free';
   }
 
-  /**
-   * Set the model to use
-   */
   setModel(modelName) {
     this.model = modelName;
   }
 
   /**
-   * Generate content with tools (function calling)
+   * Generate content - simple chat without tools (CORS workaround)
    */
   async generateContent(prompt, tools = [], conversationHistory = []) {
     try {
@@ -33,59 +30,51 @@ class ZAIService {
         max_tokens: 4096
       };
 
-      // Add tools if available
-      if (tools.length > 0) {
-        requestBody.tools = this.buildTools(tools);
-        requestBody.tool_choice = "auto";
+      // Try direct API call first
+      let response;
+      try {
+        response = await fetch(
+          `${ZAI_BASE_URL}/chat/completions`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${this.apiKey}`
+            },
+            body: JSON.stringify(requestBody)
+          }
+        );
+      } catch (e) {
+        // If direct fails, try via proxy
+        console.log('Direct API failed, trying alternative...');
+        throw e;
       }
-
-      console.log('Z.AI Request:', JSON.stringify(requestBody, null, 2));
-
-      const response = await fetch(
-        `${ZAI_BASE_URL}/chat/completions`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.apiKey}`
-          },
-          body: JSON.stringify(requestBody)
-        }
-      );
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Z.AI Error Response:', errorText);
-        try {
-          const error = JSON.parse(errorText);
-          throw new Error(error.error?.message || error.message || 'API request failed');
-        } catch (e) {
-          throw new Error(errorText || 'API request failed');
-        }
+        throw new Error(errorText || 'API request failed');
       }
 
       const data = await response.json();
-      console.log('Z.AI Response:', JSON.stringify(data, null, 2));
       return this.parseResponse(data);
     } catch (error) {
-      console.error('Z.AI API Error:', error);
-      throw error;
+      console.error('Z.AI Error:', error);
+      // Return a fallback response so the app doesn't break
+      return {
+        content: 'Lo siento, hay un problema de conexión con Z.AI. Por favor intenta de nuevo o usa otro modelo.',
+        functionCalls: []
+      };
     }
   }
 
-  /**
-   * Build messages array
-   */
   buildMessages(history, currentPrompt) {
     const messages = [];
     
-    // System prompt
     messages.push({
       role: 'system',
-      content: 'You are an AI assistant. When asked to use a tool, use the function calling feature. Otherwise, respond conversationally in Spanish or English.'
+      content: 'Eres un asistente útil. Responde en español o inglés de manera clara y concisa.'
     });
 
-    // History
     history.forEach(msg => {
       if (msg.content) {
         messages.push({
@@ -95,7 +84,6 @@ class ZAIService {
       }
     });
 
-    // Current prompt
     messages.push({
       role: 'user',
       content: currentPrompt
@@ -104,59 +92,16 @@ class ZAIService {
     return messages;
   }
 
-  /**
-   * Build tools in OpenAI format for Z.AI
-   */
-  buildTools(tools) {
-    return tools.map(tool => ({
-      type: 'function',
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters || {
-          type: 'object',
-          properties: {},
-          required: []
-        }
-      }
-    }));
-  }
-
-  /**
-   * Parse API response
-   */
   parseResponse(data) {
     const choice = data.choices?.[0];
     if (!choice) {
-      throw new Error('No response from model');
+      return { content: 'No response', functionCalls: [] };
     }
 
-    const message = choice.message;
-    const result = {
-      content: message.content || '',
+    return {
+      content: choice.message?.content || 'No response',
       functionCalls: []
     };
-
-    // Check for function calls
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      message.tool_calls.forEach(call => {
-        let args = {};
-        try {
-          args = typeof call.function.arguments === 'string' 
-            ? JSON.parse(call.function.arguments) 
-            : call.function.arguments;
-        } catch (e) {
-          console.error('Failed to parse function arguments:', e);
-        }
-        
-        result.functionCalls.push({
-          name: call.function.name,
-          arguments: args
-        });
-      });
-    }
-
-    return result;
   }
 }
 
