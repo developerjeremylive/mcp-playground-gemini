@@ -1,11 +1,8 @@
 /**
  * KiloCode API Service
- * Handles communication with Kilo Code models - with MCP tool detection
+ * Uses Netlify functions / proxy to avoid CORS issues
  */
 
-const KILOCODE_BASE_URL = 'https://api.kilocode.ai/v1';
-
-// Model configurations with their capabilities
 const MODEL_CONFIG = {
   // Models that support MCP/function calling
   'kilocode/anthropic/claude-opus-4.6': {
@@ -61,6 +58,16 @@ const MODEL_CONFIG = {
   }
 };
 
+// Dynamic proxy URL based on environment
+const getProxyUrl = () => {
+  // In production (Netlify), use the function
+  if (window.location.hostname !== 'localhost') {
+    return '/.netlify/functions/chat';
+  }
+  // In development, use local proxy or direct
+  return 'http://localhost:3457/api/chat';
+};
+
 class KiloCodeService {
   constructor() {
     this.model = 'kilocode/anthropic/claude-haiku-3.5';
@@ -90,20 +97,19 @@ class KiloCodeService {
     return MODEL_CONFIG[modelName] || { name: modelName, supportsTools: false };
   }
 
-  /**
-   * Get all available models
-   */
   static getModels() {
     return MODEL_CONFIG;
   }
 
   /**
-   * Generate content with MCP tool detection
+   * Generate content with MCP tool detection via proxy
    */
   async generateContent(prompt, tools = [], conversationHistory = []) {
     if (!this.apiKey) {
       throw new Error('API Key not configured. Please add your KiloCode API key in Settings.');
     }
+
+    const proxyUrl = getProxyUrl();
 
     try {
       const messages = this.buildMessages(conversationHistory, prompt);
@@ -112,36 +118,26 @@ class KiloCodeService {
         model: this.model,
         messages: messages,
         temperature: 0.7,
-        max_tokens: 4096
+        max_tokens: 4096,
+        apiKey: this.apiKey
       };
 
       // Add tools if supported
       if (this.supportsTools && tools.length > 0) {
-        requestBody.tools = this.buildTools(tools);
-        requestBody.tool_choice = "auto";
+        requestBody.tools = tools;
       }
 
-      const response = await fetch(
-        `${KILOCODE_BASE_URL}/chat/completions`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.apiKey}`
-          },
-          body: JSON.stringify(requestBody)
-        }
-      );
+      const response = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('KiloCode Error:', response.status, errorText);
-        try {
-          const errorJson = JSON.parse(errorText);
-          throw new Error(errorJson.error?.message || errorText);
-        } catch (e) {
-          throw new Error(errorText || `API error: ${response.status}`);
-        }
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || `API error: ${response.status}`);
       }
 
       const data = await response.json();
@@ -158,19 +154,17 @@ class KiloCodeService {
   buildMessages(history, currentPrompt) {
     const messages = [];
     
-    // System prompt
     let systemContent = 'You are a helpful AI assistant. ';
     
     if (this.supportsTools) {
       systemContent += this.getToolsPrompt();
-      systemContent += '\n\nWhen you need to use a tool, respond with [TOOL:tool_name]arg1=value1&arg2=value2[/TOOL] format. Otherwise, respond conversationally in Spanish or English.';
+      systemContent += '\n\nWhen you need to use a tool, respond with [TOOL:tool_name]arg1=value1&arg2=value2[/TOOL] format. Otherwise, respond in Spanish or English.';
     } else {
       systemContent += 'Respond in Spanish or English clearly and concisely.';
     }
 
     messages.push({ role: 'system', content: systemContent });
 
-    // History
     history.slice(-8).forEach(msg => {
       if (msg.content) {
         messages.push({
@@ -206,24 +200,6 @@ Use tools when appropriate to help the user.
   }
 
   /**
-   * Build tools in OpenAI format
-   */
-  buildTools(tools) {
-    return tools.map(tool => ({
-      type: 'function',
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters || {
-          type: 'object',
-          properties: {},
-          required: []
-        }
-      }
-    }));
-  }
-
-  /**
    * Parse response and detect tool calls
    */
   parseResponse(data) {
@@ -235,7 +211,6 @@ Use tools when appropriate to help the user.
     const content = choice.message?.content || '';
     const toolCalls = choice.message?.tool_calls || [];
     
-    // Check for tool calls
     if (toolCalls && toolCalls.length > 0) {
       const toolCall = toolCalls[0];
       return {
@@ -249,7 +224,6 @@ Use tools when appropriate to help the user.
       };
     }
     
-    // Try to detect tool call from text
     const textToolCall = this.detectToolCallFromText(content);
     
     return {
