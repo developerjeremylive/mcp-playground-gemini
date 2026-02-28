@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiSend, FiPlus, FiSettings, FiInfo, FiX, FiPlay, FiDatabase, FiClock, FiGlobe, FiFolder, FiCpu, FiLink, FiBook, FiZap } from 'react-icons/fi';
+import { FiSend, FiPlus, FiSettings, FiInfo, FiX, FiCpu, FiDatabase, FiClock, FiGlobe, FiFolder, FiLink, FiBook, FiZap } from 'react-icons/fi';
 import { MCPServers, getToolsSchema, getAllTools } from './config/mcpTools';
 import { geminiService } from './services/geminiService';
 import { toolExecutor } from './services/toolExecutor';
@@ -20,11 +20,26 @@ const serverIcons = {
   sequentialthinking: FiCpu
 };
 
+// Model configurations
+const MODELS = {
+  'gemini-3-flash-preview': {
+    name: 'Gemini 3 Flash Preview',
+    supportsTools: false,
+    description: 'Latest preview model - No function calling'
+  },
+  'gemini-1.5-flash': {
+    name: 'Gemini 1.5 Flash',
+    supportsTools: true,
+    description: 'Supports function calling for MCP tools'
+  }
+};
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedServer, setSelectedServer] = useState(null);
+  const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash');
   const [showSidebar, setShowSidebar] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
@@ -32,6 +47,9 @@ function App() {
   const [toolHistory, setToolHistory] = useState([]);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  const currentModel = MODELS[selectedModel];
+  const supportsTools = currentModel?.supportsTools || false;
 
   // Load conversation from localStorage
   useEffect(() => {
@@ -62,6 +80,16 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const handleModelChange = (e) => {
+    const newModel = e.target.value;
+    setSelectedModel(newModel);
+    
+    // Disable server selection if model doesn't support tools
+    if (!MODELS[newModel].supportsTools) {
+      setSelectedServer(null);
+    }
+  };
+
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
 
@@ -84,22 +112,24 @@ function App() {
       // Build context with selected server
       let systemPrompt = `You are an AI assistant with access to Model Context Protocol (MCP) tools. `;
       
-      if (selectedServer) {
+      if (selectedServer && supportsTools) {
         const server = MCPServers[selectedServer];
         systemPrompt += `The user has selected the "${server.name}" server. `;
         systemPrompt += `Available tools: ${server.tools.map(t => t.name).join(', ')}. `;
         systemPrompt += `Use these tools when appropriate to help the user. `;
-      } else {
+      } else if (supportsTools) {
         systemPrompt += `Available MCP servers: ${Object.values(MCPServers).map(s => s.name).join(', ')}. `;
         systemPrompt += `You can suggest which server to use based on the user's request. `;
+      } else {
+        systemPrompt += `This model doesn't support tool calling. Just respond to the user's request conversationally. `;
       }
 
-      systemPrompt += `When the user asks to use a tool, respond with the tool call in JSON format: {"tool": "tool_name", "args": {...}}. `;
+      systemPrompt += `When the user asks to use a tool and the model supports tools, respond with the tool call in JSON format: {"tool": "tool_name", "args": {...}}. `;
       systemPrompt += `Otherwise, respond conversationally.`;
 
-      // Get tools schema if server is selected
+      // Get tools schema if model supports it and server is selected
       let tools = [];
-      if (selectedServer) {
+      if (supportsTools && selectedServer) {
         const server = MCPServers[selectedServer];
         tools = server.tools;
       }
@@ -117,8 +147,8 @@ function App() {
         history
       );
 
-      // Check for function calls
-      if (response.functionCalls && response.functionCalls.length > 0) {
+      // Check for function calls (only if supported)
+      if (supportsTools && response.functionCalls && response.functionCalls.length > 0) {
         const functionCall = response.functionCalls[0];
         
         // Add assistant message with tool call
@@ -207,6 +237,7 @@ function App() {
   };
 
   const selectServer = (serverId) => {
+    if (!supportsTools) return; // Can't select server if model doesn't support tools
     setSelectedServer(serverId);
     const server = MCPServers[serverId];
     setMessages(prev => [...prev, {
@@ -242,6 +273,25 @@ function App() {
               </div>
             </div>
 
+            {/* Model Selector */}
+            <div className="p-3 border-b border-gpt-border">
+              <label className="block text-xs text-gray-500 mb-1">AI Model</label>
+              <select
+                value={selectedModel}
+                onChange={handleModelChange}
+                className="w-full bg-gpt-tertiary border border-gpt-border rounded-lg px-3 py-2 text-sm"
+              >
+                {Object.entries(MODELS).map(([key, model]) => (
+                  <option key={key} value={key}>
+                    {model.name} {model.supportsTools ? '✓' : '✗'}
+                  </option>
+                ))}
+              </select>
+              {!supportsTools && (
+                <p className="text-xs text-amber-500 mt-1">⚠️ MCP tools disabled</p>
+              )}
+            </div>
+
             {/* New Chat Button */}
             <div className="p-3">
               <button
@@ -275,13 +325,17 @@ function App() {
                   <div className="px-2 py-1 text-xs text-gray-500 uppercase font-medium">Available</div>
                   {Object.entries(MCPServers).map(([id, server]) => {
                     const Icon = serverIcons[id] || FiCpu;
+                    const isDisabled = !supportsTools;
                     return (
                       <button
                         key={id}
                         onClick={() => selectServer(id)}
+                        disabled={isDisabled}
                         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
                           selectedServer === id 
                             ? 'bg-gpt-accent/20 text-gpt-accent border border-gpt-accent/30' 
+                            : isDisabled
+                            ? 'opacity-40 cursor-not-allowed'
                             : 'hover:bg-gpt-hover'
                         }`}
                       >
@@ -342,12 +396,17 @@ function App() {
               </span>
             )}
           </div>
-          <button
-            onClick={() => setShowAbout(true)}
-            className="p-2 hover:bg-gpt-hover rounded-lg transition-colors"
-          >
-            <FiInfo />
-          </button>
+          <div className="flex items-center gap-2">
+            <span className={`text-xs px-2 py-1 rounded-full ${supportsTools ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400'}`}>
+              {supportsTools ? '✓ MCP Enabled' : '✗ MCP Disabled'}
+            </span>
+            <button
+              onClick={() => setShowAbout(true)}
+              className="p-2 hover:bg-gpt-hover rounded-lg transition-colors"
+            >
+              <FiInfo />
+            </button>
+          </div>
         </header>
 
         {/* Messages */}
@@ -359,8 +418,9 @@ function App() {
               </div>
               <h2 className="text-2xl font-semibold mb-2">MCP Playground</h2>
               <p className="text-gray-400 max-w-md">
-                Select a server from the sidebar or describe what you want to do.
-                Powered by Gemini 2.0 Flash with MCP tool execution.
+                Select a model and server from the sidebar. 
+                <br/>
+                <span className="text-amber-400">Gemini 1.5 Flash</span> supports MCP tools.
               </p>
             </div>
           ) : (
@@ -427,25 +487,27 @@ function App() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder={selectedServer 
-                  ? `Message ${MCPServers[selectedServer]?.name}...` 
-                  : 'Select a server and describe what you want to do...'
+                placeholder={supportsTools 
+                  ? (selectedServer 
+                    ? `Message ${MCPServers[selectedServer]?.name}...` 
+                    : 'Select a server and describe what you want to do...')
+                  : 'MCP tools disabled for this model. Select Gemini 1.5 Flash for tools.'
                 }
-                disabled={!selectedServer}
+                disabled={!supportsTools && !selectedServer}
                 rows={1}
                 className="w-full bg-gpt-tertiary border border-gpt-border rounded-xl px-4 py-3 pr-12 resize-none outline-none focus:border-gpt-accent transition-colors disabled:opacity-50"
                 style={{ minHeight: '52px', maxHeight: '200px' }}
               />
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || isLoading || !selectedServer}
+                disabled={!input.trim() || isLoading || (!supportsTools && !selectedServer)}
                 className="absolute right-2 bottom-2 p-2 bg-gpt-accent hover:bg-gpt-accent-hover disabled:bg-gpt-hover disabled:cursor-not-allowed rounded-lg transition-colors"
               >
                 <FiSend className="text-white" />
               </button>
             </div>
             <div className="text-center text-xs text-gray-500 mt-2">
-              Gemini 2.0 Flash · MCP Tools · Browser Storage
+              {selectedModel} · {supportsTools ? 'MCP Enabled' : 'MCP Disabled'}
             </div>
           </div>
         </div>
@@ -463,14 +525,18 @@ function App() {
             </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm text-gray-400 mb-1">API Key</label>
-                <input
-                  type="password"
-                  value="AIzaSyDu9pmFF4pL-CcNjZWIPu7WgCz14vTG5bA"
-                  disabled
+                <label className="block text-sm text-gray-400 mb-1">AI Model</label>
+                <select
+                  value={selectedModel}
+                  onChange={handleModelChange}
                   className="w-full bg-gpt-tertiary border border-gpt-border rounded-lg px-3 py-2 text-sm"
-                />
-                <p className="text-xs text-gray-500 mt-1">Using Gemini 2.0 Flash (configured)</p>
+                >
+                  {Object.entries(MODELS).map(([key, model]) => (
+                    <option key={key} value={key}>
+                      {model.name} - {model.description}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Storage</label>
@@ -506,16 +572,13 @@ function App() {
                   ⚡
                 </div>
                 <h2 className="text-xl font-semibold">MCP Playground</h2>
-                <p className="text-gray-400 text-sm">Powered by Gemini 2.0 Flash</p>
+                <p className="text-gray-400 text-sm">Powered by Google Gemini</p>
               </div>
               <div className="bg-gpt-tertiary rounded-xl p-4 space-y-2">
-                <h4 className="font-medium">Features:</h4>
+                <h4 className="font-medium">Available Models:</h4>
                 <ul className="text-sm text-gray-400 space-y-1">
-                  <li>✓ {Object.keys(MCPServers).length} MCP Servers without credentials</li>
-                  <li>✓ {getAllTools().length} Tools available</li>
-                  <li>✓ Real-time tool execution</li>
-                  <li>✓ Browser localStorage for persistence</li>
-                  <li>✓ Professional ChatGPT-style UI</li>
+                  <li>✓ <strong>Gemini 1.5 Flash</strong> - Supports MCP tools (function calling)</li>
+                  <li>✗ <strong>Gemini 3 Flash Preview</strong> - No function calling support</li>
                 </ul>
               </div>
               <div className="text-xs text-gray-500 text-center">
