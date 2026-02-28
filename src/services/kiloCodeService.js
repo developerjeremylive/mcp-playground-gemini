@@ -1,6 +1,6 @@
 /**
  * KiloCode API Service
- * Uses AllOrigins proxy to avoid CORS issues
+ * Uses Netlify function as primary proxy
  */
 
 const MODEL_CONFIG = {
@@ -16,21 +16,14 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Multiple CORS proxies to try
-const CORS_PROXIES = [
-  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  (url) => `https://cors-anywhere.herokuapp.com/${url}`
-];
-
-const KILOCODE_API = 'https://api.kilocode.ai/v1/chat/completions';
+// Netlify function URL
+const NETLIFY_FUNCTION = '/.netlify/functions/chat';
 
 class KiloCodeService {
   constructor() {
     this.model = 'kilocode/anthropic/claude-haiku-3.5';
     this.supportsTools = true;
     this.apiKey = '';
-    this.proxyIndex = 0;
   }
 
   setApiKey(key) { this.apiKey = key; }
@@ -44,82 +37,62 @@ class KiloCodeService {
   getModelConfig(modelName) { return MODEL_CONFIG[modelName] || { name: modelName, supportsTools: false }; }
   static getModels() { return MODEL_CONFIG; }
 
-  getProxyUrl() {
-    return CORS_PROXIES[this.proxyIndex](KILOCODE_API);
-  }
-
   async generateContent(prompt, tools = [], conversationHistory = []) {
     if (!this.apiKey) {
       throw new Error('API Key not configured. Please add your KiloCode API key in Settings.');
     }
 
-    let lastError = null;
-    
-    // Try each proxy
-    for (let i = 0; i < CORS_PROXIES.length; i++) {
-      this.proxyIndex = i;
+    try {
+      const messages = this.buildMessages(conversationHistory, prompt);
       
-      try {
-        const messages = this.buildMessages(conversationHistory, prompt);
-        
-        const requestBody = {
-          model: this.model,
-          messages: messages,
-          temperature: 0.7,
-          max_tokens: 4096
-        };
+      const requestBody = {
+        model: this.model,
+        messages: messages,
+        temperature: 0.7,
+        max_tokens: 4096,
+        apiKey: this.apiKey
+      };
 
-        if (this.supportsTools && tools.length > 0) {
-          requestBody.tools = tools;
-          requestBody.tool_choice = "auto";
-        }
-
-        const proxyUrl = this.getProxyUrl();
-        console.log('Trying proxy:', proxyUrl.substring(0, 50) + '...');
-        
-        const response = await fetch(proxyUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.apiKey}`
-          },
-          body: JSON.stringify(requestBody)
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.log('Proxy error:', response.status, errorText.substring(0, 200));
-          lastError = new Error(`Proxy error: ${response.status}`);
-          continue;
-        }
-
-        const text = await response.text();
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch (e) {
-          console.log('Invalid JSON from proxy:', text.substring(0, 200));
-          lastError = new Error('Invalid response from proxy');
-          continue;
-        }
-
-        if (data.contents) {
-          // AllOrigins wraps the response
-          data = JSON.parse(data.contents);
-        }
-
-        if (data.error) {
-          throw new Error(data.error.message || data.error);
-        }
-
-        return this.parseResponse(data);
-      } catch (error) {
-        console.log('Proxy attempt', i + 1, 'failed:', error.message);
-        lastError = error;
+      if (this.supportsTools && tools.length > 0) {
+        requestBody.tools = tools;
+        requestBody.tool_choice = "auto";
       }
-    }
 
-    throw lastError || new Error('All CORS proxies failed');
+      console.log('Calling Netlify function...');
+      
+      const response = await fetch(NETLIFY_FUNCTION, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      console.log('Response status:', response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log('Function error:', errorText);
+        try {
+          const errorJson = JSON.parse(errorText);
+          throw new Error(errorJson.error || errorText);
+        } catch (e) {
+          throw new Error(errorText || `Function error: ${response.status}`);
+        }
+      }
+
+      const data = await response.json();
+      console.log('Function response:', JSON.stringify(data).substring(0, 200));
+
+      if (data.error) {
+        throw new Error(data.error.message || data.error);
+      }
+
+      return this.parseResponse(data);
+    } catch (error) {
+      console.error('KiloCode Error:', error);
+      throw error;
+    }
   }
 
   buildMessages(history, currentPrompt) {

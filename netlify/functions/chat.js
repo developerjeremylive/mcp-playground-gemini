@@ -2,8 +2,8 @@ exports.handler = async (event, context) => {
   // CORS headers
   const headers = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS'
   };
 
   // Handle preflight
@@ -13,12 +13,14 @@ exports.handler = async (event, context) => {
 
   // Only allow POST
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers, body: 'Method not allowed' };
+    return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) };
   }
 
   try {
     const body = JSON.parse(event.body || '{}');
     const { messages, model, tools, apiKey } = body;
+    
+    console.log('Received request, apiKey present:', !!apiKey);
     
     if (!apiKey) {
       return { 
@@ -47,6 +49,8 @@ exports.handler = async (event, context) => {
       requestBody.tool_choice = "auto";
     }
 
+    console.log('Forwarding to KiloCode API...');
+
     const response = await fetch('https://api.kilocode.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -56,22 +60,26 @@ exports.handler = async (event, context) => {
       body: JSON.stringify(requestBody)
     });
 
+    const responseText = await response.text();
+    console.log('KiloCode response status:', response.status);
+    console.log('KiloCode response:', responseText.substring(0, 200));
+
     if (!response.ok) {
-      const errorText = await response.text();
       return { 
         statusCode: response.status, 
         headers,
-        body: errorText 
+        body: responseText 
       };
     }
 
-    const data = await response.json();
+    const data = JSON.parse(responseText);
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify(data)
     };
   } catch (error) {
+    console.error('Function error:', error);
     return { 
       statusCode: 500, 
       headers,
