@@ -1,6 +1,6 @@
 /**
  * KiloCode API Service
- * Uses Netlify function as primary proxy
+ * Direct call to Netlify function
  */
 
 const MODEL_CONFIG = {
@@ -16,8 +16,8 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Netlify function URL
-const NETLIFY_FUNCTION = '/.netlify/functions/chat';
+// Direct function URL
+const FUNCTION_URL = 'https://mcp-gemini-ai.netlify.app/.netlify/functions/chat';
 
 class KiloCodeService {
   constructor() {
@@ -58,9 +58,9 @@ class KiloCodeService {
         requestBody.tool_choice = "auto";
       }
 
-      console.log('Calling Netlify function...');
+      console.log('Calling function directly at:', FUNCTION_URL);
       
-      const response = await fetch(NETLIFY_FUNCTION, {
+      const response = await fetch(FUNCTION_URL, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -73,16 +73,11 @@ class KiloCodeService {
       if (!response.ok) {
         const errorText = await response.text();
         console.log('Function error:', errorText);
-        try {
-          const errorJson = JSON.parse(errorText);
-          throw new Error(errorJson.error || errorText);
-        } catch (e) {
-          throw new Error(errorText || `Function error: ${response.status}`);
-        }
+        throw new Error(errorText || `Function error: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('Function response:', JSON.stringify(data).substring(0, 200));
+      console.log('Success!');
 
       if (data.error) {
         throw new Error(data.error.message || data.error);
