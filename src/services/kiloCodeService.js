@@ -1,6 +1,6 @@
 /**
  * KiloCode API Service
- * Uses corsproxy.io to avoid CORS issues
+ * Uses AllOrigins proxy to avoid CORS issues
  */
 
 const MODEL_CONFIG = {
@@ -16,8 +16,13 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Use corsproxy.io to bypass CORS
-const CORS_PROXY = 'https://corsproxy.io/?';
+// Multiple CORS proxies to try
+const CORS_PROXIES = [
+  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  (url) => `https://cors-anywhere.herokuapp.com/${url}`
+];
+
 const KILOCODE_API = 'https://api.kilocode.ai/v1/chat/completions';
 
 class KiloCodeService {
@@ -25,6 +30,7 @@ class KiloCodeService {
     this.model = 'kilocode/anthropic/claude-haiku-3.5';
     this.supportsTools = true;
     this.apiKey = '';
+    this.proxyIndex = 0;
   }
 
   setApiKey(key) { this.apiKey = key; }
@@ -38,54 +44,82 @@ class KiloCodeService {
   getModelConfig(modelName) { return MODEL_CONFIG[modelName] || { name: modelName, supportsTools: false }; }
   static getModels() { return MODEL_CONFIG; }
 
+  getProxyUrl() {
+    return CORS_PROXIES[this.proxyIndex](KILOCODE_API);
+  }
+
   async generateContent(prompt, tools = [], conversationHistory = []) {
     if (!this.apiKey) {
       throw new Error('API Key not configured. Please add your KiloCode API key in Settings.');
     }
 
-    try {
-      const messages = this.buildMessages(conversationHistory, prompt);
+    let lastError = null;
+    
+    // Try each proxy
+    for (let i = 0; i < CORS_PROXIES.length; i++) {
+      this.proxyIndex = i;
       
-      const requestBody = {
-        model: this.model,
-        messages: messages,
-        temperature: 0.7,
-        max_tokens: 4096
-      };
+      try {
+        const messages = this.buildMessages(conversationHistory, prompt);
+        
+        const requestBody = {
+          model: this.model,
+          messages: messages,
+          temperature: 0.7,
+          max_tokens: 4096
+        };
 
-      if (this.supportsTools && tools.length > 0) {
-        requestBody.tools = tools;
-        requestBody.tool_choice = "auto";
-      }
+        if (this.supportsTools && tools.length > 0) {
+          requestBody.tools = tools;
+          requestBody.tool_choice = "auto";
+        }
 
-      // Use CORS proxy
-      const proxyUrl = CORS_PROXY + encodeURIComponent(KILOCODE_API);
-      
-      const response = await fetch(proxyUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
-        },
-        body: JSON.stringify(requestBody)
-      });
+        const proxyUrl = this.getProxyUrl();
+        console.log('Trying proxy:', proxyUrl.substring(0, 50) + '...');
+        
+        const response = await fetch(proxyUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.apiKey}`
+          },
+          body: JSON.stringify(requestBody)
+        });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorMsg = `API error: ${response.status}`;
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.log('Proxy error:', response.status, errorText.substring(0, 200));
+          lastError = new Error(`Proxy error: ${response.status}`);
+          continue;
+        }
+
+        const text = await response.text();
+        let data;
         try {
-          const errorJson = JSON.parse(errorText);
-          errorMsg = errorJson.error?.message || errorJson.error || errorMsg;
-        } catch (e) {}
-        throw new Error(errorMsg);
-      }
+          data = JSON.parse(text);
+        } catch (e) {
+          console.log('Invalid JSON from proxy:', text.substring(0, 200));
+          lastError = new Error('Invalid response from proxy');
+          continue;
+        }
 
-      const data = await response.json();
-      return this.parseResponse(data);
-    } catch (error) {
-      console.error('KiloCode Error:', error);
-      throw error;
+        if (data.contents) {
+          // AllOrigins wraps the response
+          data = JSON.parse(data.contents);
+        }
+
+        if (data.error) {
+          throw new Error(data.error.message || data.error);
+        }
+
+        return this.parseResponse(data);
+      } catch (error) {
+        console.log('Proxy attempt', i + 1, 'failed:', error.message);
+        lastError = error;
+      }
     }
+
+    throw lastError || new Error('All CORS proxies failed');
   }
 
   buildMessages(history, currentPrompt) {
