@@ -1,0 +1,273 @@
+/**
+ * KiloCode API Service
+ * Handles communication with Kilo Code models - with MCP tool detection
+ */
+
+const KILOCODE_BASE_URL = 'https://api.kilocode.ai/v1';
+
+// Model configurations with their capabilities
+const MODEL_CONFIG = {
+  // Models that support MCP/function calling
+  'kilocode/anthropic/claude-opus-4.6': {
+    name: 'Claude Opus',
+    supportsTools: true,
+    provider: 'anthropic'
+  },
+  'kilocode/anthropic/claude-sonnet-4.6': {
+    name: 'Claude Sonnet',
+    supportsTools: true,
+    provider: 'anthropic'
+  },
+  'kilocode/anthropic/claude-haiku-3.5': {
+    name: 'Claude Haiku',
+    supportsTools: true,
+    provider: 'anthropic'
+  },
+  'kilocode/google/gemini-pro-1.5': {
+    name: 'Gemini Pro 1.5',
+    supportsTools: true,
+    provider: 'google'
+  },
+  'kilocode/google/gemini-flash-1.5': {
+    name: 'Gemini Flash 1.5',
+    supportsTools: true,
+    provider: 'google'
+  },
+  'kilocode/meta-llama/llama-3.1-70b-instruct': {
+    name: 'Llama 3.1 70B',
+    supportsTools: true,
+    provider: 'meta'
+  },
+  'kilocode/meta-llama/llama-3.1-8b-instruct': {
+    name: 'Llama 3.1 8B',
+    supportsTools: true,
+    provider: 'meta'
+  },
+  // Chat-only models
+  'kilocode/microsoft/phi-3-mini-128k-instruct': {
+    name: 'Phi-3 Mini',
+    supportsTools: false,
+    provider: 'microsoft'
+  },
+  'kilocode/mistralai/mistral-7b-instruct-v0.2': {
+    name: 'Mistral 7B',
+    supportsTools: false,
+    provider: 'mistralai'
+  },
+  'kilocode/qwen/qwen-2-72b-instruct': {
+    name: 'Qwen 2 72B',
+    supportsTools: true,
+    provider: 'qwen'
+  }
+};
+
+class KiloCodeService {
+  constructor() {
+    this.model = 'kilocode/anthropic/claude-haiku-3.5';
+    this.supportsTools = true;
+  }
+
+  setModel(modelName) {
+    this.model = modelName;
+    const config = MODEL_CONFIG[modelName] || { supportsTools: false };
+    this.supportsTools = config.supportsTools;
+  }
+
+  supportsMCP() {
+    return this.supportsTools;
+  }
+
+  getModelConfig(modelName) {
+    return MODEL_CONFIG[modelName] || { name: modelName, supportsTools: false };
+  }
+
+  /**
+   * Get all available models
+   */
+  static getModels() {
+    return MODEL_CONFIG;
+  }
+
+  /**
+   * Generate content with MCP tool detection
+   */
+  async generateContent(prompt, tools = [], conversationHistory = []) {
+    try {
+      const messages = this.buildMessages(conversationHistory, prompt);
+      
+      const requestBody = {
+        model: this.model,
+        messages: messages,
+        temperature: 0.7,
+        max_tokens: 4096
+      };
+
+      // Add tools if supported
+      if (this.supportsTools && tools.length > 0) {
+        requestBody.tools = this.buildTools(tools);
+        requestBody.tool_choice = "auto";
+      }
+
+      const response = await fetch(
+        `${KILOCODE_BASE_URL}/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer free'
+          },
+          body: JSON.stringify(requestBody)
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('KiloCode Error:', response.status, errorText);
+        throw new Error(errorText || `API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return this.parseResponse(data);
+    } catch (error) {
+      console.error('KiloCode Error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Build messages with MCP context
+   */
+  buildMessages(history, currentPrompt) {
+    const messages = [];
+    
+    // System prompt
+    let systemContent = 'You are a helpful AI assistant. ';
+    
+    if (this.supportsTools) {
+      systemContent += this.getToolsPrompt();
+      systemContent += '\n\nWhen you need to use a tool, respond with [TOOL:tool_name]arg1=value1&arg2=value2[/TOOL] format. Otherwise, respond conversationally in Spanish or English.';
+    } else {
+      systemContent += 'Respond in Spanish or English clearly and concisely.';
+    }
+
+    messages.push({ role: 'system', content: systemContent });
+
+    // History
+    history.slice(-8).forEach(msg => {
+      if (msg.content) {
+        messages.push({
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.content
+        });
+      }
+    });
+
+    messages.push({ role: 'user', content: currentPrompt });
+
+    return messages;
+  }
+
+  /**
+   * Get tools description for the prompt
+   */
+  getToolsPrompt() {
+    return `
+You have access to these MCP tools:
+- filesystem: read_file(path), write_file(path, content), list_directory(path), create_directory(path), delete(path)
+- memory: append(collection, content), query(collection, query, limit), list_collections(), create_collection(name)
+- fetch: fetch(url, max_length)
+- time: get_current_time(), get_timezone(timezone)
+- git: git_status(repo_path), git_log(repo_path, max_count), git_branch(repo_path)
+- http: request(method, url, headers, body)
+- sqlite: query(database, query)
+- context7: search_docs(query, source)
+- sequentialthinking: think(thought, context, depth)
+
+Use tools when appropriate to help the user.
+`;
+  }
+
+  /**
+   * Build tools in OpenAI format
+   */
+  buildTools(tools) {
+    return tools.map(tool => ({
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters || {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      }
+    }));
+  }
+
+  /**
+   * Parse response and detect tool calls
+   */
+  parseResponse(data) {
+    const choice = data.choices?.[0];
+    if (!choice) {
+      throw new Error('No response from model');
+    }
+
+    const content = choice.message?.content || '';
+    const toolCalls = choice.message?.tool_calls || [];
+    
+    // Check for tool calls
+    if (toolCalls && toolCalls.length > 0) {
+      const toolCall = toolCalls[0];
+      return {
+        content: content,
+        toolCall: {
+          name: toolCall.function.name,
+          arguments: typeof toolCall.function.arguments === 'string' 
+            ? JSON.parse(toolCall.function.arguments) 
+            : toolCall.function.arguments
+        }
+      };
+    }
+    
+    // Try to detect tool call from text
+    const textToolCall = this.detectToolCallFromText(content);
+    
+    return {
+      content: content,
+      toolCall: textToolCall
+    };
+  }
+
+  /**
+   * Detect tool call from text response
+   */
+  detectToolCallFromText(content) {
+    const toolPattern = /\[TOOL:(\w+)\](.*?)\[\/TOOL\]/s;
+    const match = content.match(toolPattern);
+    
+    if (match) {
+      const toolName = match[1];
+      const argsStr = match[2];
+      
+      const args = {};
+      if (argsStr) {
+        argsStr.split('&').forEach(pair => {
+          const [key, ...valueParts] = pair.split('=');
+          if (key && valueParts.length > 0) {
+            args[key] = decodeURIComponent(valueParts.join('='));
+          }
+        });
+      }
+      
+      return { name: toolName, arguments: args };
+    }
+    
+    return null;
+  }
+}
+
+export const kiloCodeService = new KiloCodeService();
+export { MODEL_CONFIG };
+export default KiloCodeService;
