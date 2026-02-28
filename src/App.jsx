@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { FiSend, FiPlus, FiSettings, FiInfo, FiX, FiCpu, FiDatabase, FiClock, FiGlobe, FiFolder, FiLink, FiBook, FiZap } from 'react-icons/fi';
 import { MCPServers, getToolsSchema, getAllTools } from './config/mcpTools';
 import { geminiService } from './services/geminiService';
+import { zaiService } from './services/zaiService';
 import { toolExecutor } from './services/toolExecutor';
 
 // Icons mapping
@@ -20,17 +21,39 @@ const serverIcons = {
   sequentialthinking: FiCpu
 };
 
-// Model configurations
+// Model configurations - Z.AI models with function calling + Gemini without
 const MODELS = {
+  // Z.AI models with MCP/Function Calling support
+  'z-ai/minimax/minimax-m2.5:free': {
+    name: 'MiniMax M2.5 Free',
+    provider: 'z-ai',
+    supportsTools: true,
+    description: 'Z.AI - Supports MCP tools'
+  },
+  'z-ai/glm-5:free': {
+    name: 'GLM-5 Free',
+    provider: 'z-ai',
+    supportsTools: true,
+    description: 'Z.AI - Supports MCP tools'
+  },
+  'z-ai/qwen/qwen-turbo': {
+    name: 'Qwen Turbo',
+    provider: 'z-ai',
+    supportsTools: true,
+    description: 'Z.AI - Supports MCP tools'
+  },
+  'z-ai/liu.20240417:fast': {
+    name: 'Liu Fast',
+    provider: 'z-ai',
+    supportsTools: true,
+    description: 'Z.AI - Supports MCP tools'
+  },
+  // Gemini without MCP
   'gemini-3-flash-preview': {
     name: 'Gemini 3 Flash Preview',
+    provider: 'gemini',
     supportsTools: false,
-    description: 'Latest preview model - No function calling'
-  },
-  'gemini-1.5-flash': {
-    name: 'Gemini 1.5 Flash',
-    supportsTools: true,
-    description: 'Supports function calling for MCP tools'
+    description: 'Google - No MCP tools'
   }
 };
 
@@ -39,7 +62,7 @@ function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedServer, setSelectedServer] = useState(null);
-  const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash');
+  const [selectedModel, setSelectedModel] = useState('z-ai/minimax/minimax-m2.5:free');
   const [showSidebar, setShowSidebar] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
@@ -50,6 +73,7 @@ function App() {
 
   const currentModel = MODELS[selectedModel];
   const supportsTools = currentModel?.supportsTools || false;
+  const isZAI = currentModel?.provider === 'z-ai';
 
   // Load conversation from localStorage
   useEffect(() => {
@@ -84,8 +108,13 @@ function App() {
     const newModel = e.target.value;
     setSelectedModel(newModel);
     
+    // Update Z.AI service model if needed
+    if (MODELS[newModel]?.provider === 'z-ai') {
+      zaiService.setModel(newModel);
+    }
+    
     // Disable server selection if model doesn't support tools
-    if (!MODELS[newModel].supportsTools) {
+    if (!MODELS[newModel]?.supportsTools) {
       setSelectedServer(null);
     }
   };
@@ -140,12 +169,23 @@ function App() {
         content: m.content
       }));
 
-      // Call Gemini
-      const response = await geminiService.generateContent(
-        `${systemPrompt}\n\nUser: ${userMessage}`,
-        tools,
-        history
-      );
+      let response;
+
+      // Use Z.AI for MCP tools, Gemini for regular chat
+      if (isZAI && supportsTools) {
+        response = await zaiService.generateContent(
+          `${systemPrompt}\n\nUser: ${userMessage}`,
+          tools,
+          history
+        );
+      } else {
+        // Use Gemini (no tools)
+        response = await geminiService.generateContent(
+          `${systemPrompt}\n\nUser: ${userMessage}`,
+          [],
+          history
+        );
+      }
 
       // Check for function calls (only if supported)
       if (supportsTools && response.functionCalls && response.functionCalls.length > 0) {
@@ -184,16 +224,24 @@ function App() {
         setToolHistory(prev => [...prev.slice(-19), toolMsg]);
 
         // Continue conversation with tool result
-        const followUpResponse = await geminiService.generateContent(
-          `The tool result was: ${JSON.stringify(toolResult)}. Please explain this result to the user.`,
-          [],
-          [...history, { role: 'user', content: userMessage }, { role: 'model', content: response.content }]
-        );
+        if (isZAI) {
+          response = await zaiService.generateContent(
+            `The tool result was: ${JSON.stringify(toolResult)}. Please explain this result to the user.`,
+            [],
+            [...history, { role: 'user', content: userMessage }, { role: 'assistant', content: response.content }]
+          );
+        } else {
+          response = await geminiService.generateContent(
+            `The tool result was: ${JSON.stringify(toolResult)}. Please explain this result to the user.`,
+            [],
+            [...history, { role: 'user', content: userMessage }, { role: 'model', content: response.content }]
+          );
+        }
 
         const finalMsg = {
           id: Date.now() + 2,
           role: 'assistant',
-          content: followUpResponse.content,
+          content: response.content,
           timestamp: new Date().toISOString()
         };
         setMessages(prev => [...prev, finalMsg]);
@@ -237,7 +285,7 @@ function App() {
   };
 
   const selectServer = (serverId) => {
-    if (!supportsTools) return; // Can't select server if model doesn't support tools
+    if (!supportsTools) return;
     setSelectedServer(serverId);
     const server = MCPServers[serverId];
     setMessages(prev => [...prev, {
@@ -281,14 +329,23 @@ function App() {
                 onChange={handleModelChange}
                 className="w-full bg-gpt-tertiary border border-gpt-border rounded-lg px-3 py-2 text-sm"
               >
-                {Object.entries(MODELS).map(([key, model]) => (
-                  <option key={key} value={key}>
-                    {model.name} {model.supportsTools ? '✓' : '✗'}
-                  </option>
-                ))}
+                <optgroup label="Z.AI (Supports MCP)">
+                  {Object.entries(MODELS).filter(([k, v]) => v.provider === 'z-ai').map(([key, model]) => (
+                    <option key={key} value={key}>
+                      {model.name} ✓
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Google (No MCP)">
+                  {Object.entries(MODELS).filter(([k, v]) => v.provider === 'gemini').map(([key, model]) => (
+                    <option key={key} value={key}>
+                      {model.name}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
               {!supportsTools && (
-                <p className="text-xs text-amber-500 mt-1">⚠️ MCP tools disabled</p>
+                <p className="text-xs text-amber-500 mt-1">⚠️ MCP disabled</p>
               )}
             </div>
 
@@ -418,9 +475,9 @@ function App() {
               </div>
               <h2 className="text-2xl font-semibold mb-2">MCP Playground</h2>
               <p className="text-gray-400 max-w-md">
-                Select a model and server from the sidebar. 
+                Select a <span className="text-gpt-accent">Z.AI model</span> from the sidebar to use MCP tools.
                 <br/>
-                <span className="text-amber-400">Gemini 1.5 Flash</span> supports MCP tools.
+                Or use <span className="text-amber-400">Gemini</span> for regular chat.
               </p>
             </div>
           ) : (
@@ -442,7 +499,7 @@ function App() {
                 </div>
                 <div className={`flex-1 max-w-[80%] ${msg.role === 'user' ? 'text-right' : ''}`}>
                   <div className={`text-xs text-gray-500 mb-1 ${msg.role === 'user' ? 'text-right' : ''}`}>
-                    {msg.role === 'user' ? 'You' : msg.role === 'tool' ? `🔧 ${msg.toolName}` : 'MCP Assistant'} · {formatTimestamp(msg.timestamp)}
+                    {msg.role === 'user' ? 'You' : msg.role === 'tool' ? `🔧 ${msg.toolName}` : 'AI Assistant'} · {formatTimestamp(msg.timestamp)}
                   </div>
                   <div className={`rounded-2xl p-3 ${
                     msg.role === 'user' 
@@ -491,23 +548,22 @@ function App() {
                   ? (selectedServer 
                     ? `Message ${MCPServers[selectedServer]?.name}...` 
                     : 'Select a server and describe what you want to do...')
-                  : 'MCP tools disabled for this model. Select Gemini 1.5 Flash for tools.'
+                  : 'MCP disabled. Using Gemini for chat only.'
                 }
-                disabled={!supportsTools && !selectedServer}
                 rows={1}
-                className="w-full bg-gpt-tertiary border border-gpt-border rounded-xl px-4 py-3 pr-12 resize-none outline-none focus:border-gpt-accent transition-colors disabled:opacity-50"
+                className="w-full bg-gpt-tertiary border border-gpt-border rounded-xl px-4 py-3 pr-12 resize-none outline-none focus:border-gpt-accent transition-colors"
                 style={{ minHeight: '52px', maxHeight: '200px' }}
               />
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || isLoading || (!supportsTools && !selectedServer)}
+                disabled={!input.trim() || isLoading}
                 className="absolute right-2 bottom-2 p-2 bg-gpt-accent hover:bg-gpt-accent-hover disabled:bg-gpt-hover disabled:cursor-not-allowed rounded-lg transition-colors"
               >
                 <FiSend className="text-white" />
               </button>
             </div>
             <div className="text-center text-xs text-gray-500 mt-2">
-              {selectedModel} · {supportsTools ? 'MCP Enabled' : 'MCP Disabled'}
+              {selectedModel} · {supportsTools ? 'MCP Enabled (Z.AI)' : 'Chat Only (Gemini)'}
             </div>
           </div>
         </div>
@@ -531,16 +587,25 @@ function App() {
                   onChange={handleModelChange}
                   className="w-full bg-gpt-tertiary border border-gpt-border rounded-lg px-3 py-2 text-sm"
                 >
-                  {Object.entries(MODELS).map(([key, model]) => (
-                    <option key={key} value={key}>
-                      {model.name} - {model.description}
-                    </option>
-                  ))}
+                  <optgroup label="Z.AI (Supports MCP)">
+                    {Object.entries(MODELS).filter(([k, v]) => v.provider === 'z-ai').map(([key, model]) => (
+                      <option key={key} value={key}>
+                        {model.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Google (No MCP)">
+                    {Object.entries(MODELS).filter(([k, v]) => v.provider === 'gemini').map(([key, model]) => (
+                      <option key={key} value={key}>
+                        {model.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </div>
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Storage</label>
-                <p className="text-sm">Conversations are stored in browser localStorage</p>
+                <p className="text-sm">Conversations stored in browser localStorage</p>
                 <button 
                   onClick={() => {
                     localStorage.clear();
@@ -572,17 +637,17 @@ function App() {
                   ⚡
                 </div>
                 <h2 className="text-xl font-semibold">MCP Playground</h2>
-                <p className="text-gray-400 text-sm">Powered by Google Gemini</p>
+                <p className="text-gray-400 text-sm">Powered by Z.AI + Google Gemini</p>
               </div>
               <div className="bg-gpt-tertiary rounded-xl p-4 space-y-2">
                 <h4 className="font-medium">Available Models:</h4>
                 <ul className="text-sm text-gray-400 space-y-1">
-                  <li>✓ <strong>Gemini 1.5 Flash</strong> - Supports MCP tools (function calling)</li>
-                  <li>✗ <strong>Gemini 3 Flash Preview</strong> - No function calling support</li>
+                  <li>✓ <strong>Z.AI Models</strong> - Support MCP tools (function calling)</li>
+                  <li>✗ <strong>Gemini 3 Flash</strong> - Chat only, no MCP</li>
                 </ul>
               </div>
               <div className="text-xs text-gray-500 text-center">
-                Built with React + Gemini API · Serverless ready
+                Built with React · Serverless ready
               </div>
             </div>
           </div>
