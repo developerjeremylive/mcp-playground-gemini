@@ -1,6 +1,6 @@
 /**
  * KiloCode API Service
- * Using CodeTabs proxy
+ * Final attempt with worker-based CORS proxy
  */
 
 const MODEL_CONFIG = {
@@ -16,12 +16,6 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Try multiple approaches
-const PROXY_ENDPOINTS = [
-  { url: 'https://api.allorigins.win/raw?url=', encode: true },
-  { url: 'https://corsproxy.io/?', encode: true }
-];
-
 const KILOCODE_API = 'https://api.kilocode.ai/v1/chat/completions';
 
 class KiloCodeService {
@@ -29,10 +23,12 @@ class KiloCodeService {
     this.model = 'kilocode/anthropic/claude-haiku-3.5';
     this.supportsTools = true;
     this.apiKey = '';
+    this.customProxy = '';
   }
 
   setApiKey(key) { this.apiKey = key; }
   getApiKey() { return this.apiKey; }
+  setCustomProxy(url) { this.customProxy = url; }
   setModel(modelName) {
     this.model = modelName;
     const config = MODEL_CONFIG[modelName] || { supportsTools: false };
@@ -61,57 +57,60 @@ class KiloCodeService {
       requestBody.tool_choice = "auto";
     }
 
-    // Try direct call first
-    try {
-      console.log('Trying direct call...');
-      const response = await fetch(KILOCODE_API, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
-        },
-        body: JSON.stringify(requestBody)
-      });
+    const fetchOptions = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify(requestBody)
+    };
 
+    // Try custom proxy first if set
+    if (this.customProxy) {
+      try {
+        console.log('Trying custom proxy:', this.customProxy);
+        const response = await fetch(this.customProxy, fetchOptions);
+        if (response.ok) {
+          const data = await response.json();
+          return this.parseResponse(data);
+        }
+      } catch (e) {
+        console.log('Custom proxy failed:', e.message);
+      }
+    }
+
+    // Try direct
+    try {
+      console.log('Trying direct API call...');
+      const response = await fetch(KILOCODE_API, fetchOptions);
       if (response.ok) {
         const data = await response.json();
         return this.parseResponse(data);
       }
-      console.log('Direct call failed:', response.status);
+      const err = await response.text();
+      throw new Error(`API error: ${response.status} - ${err}`);
     } catch (e) {
-      console.log('Direct call error:', e.message);
+      console.log('Direct call failed:', e.message);
     }
 
-    // Try with allorigins proxy
+    // Try Netlify function
     try {
-      console.log('Trying allorigins proxy...');
-      const proxyUrl = PROXY_ENDPOINTS[0].encode 
-        ? PROXY_ENDPOINTS[0].url + encodeURIComponent(KILOCODE_API)
-        : PROXY_ENDPOINTS[0].url + KILOCODE_API;
-      
-      const response = await fetch(proxyUrl, {
+      console.log('Trying Netlify function...');
+      const nfResponse = await fetch('https://mcp-gemini-ai.netlify.app/.netlify/functions/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
-        },
-        body: JSON.stringify(requestBody)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...requestBody, apiKey: this.apiKey })
       });
-
-      if (response.ok) {
-        const text = await response.text();
-        try {
-          const data = JSON.parse(text);
-          return this.parseResponse(data);
-        } catch (e) {
-          console.log('Failed to parse response:', text.substring(0, 100));
-        }
+      if (nfResponse.ok) {
+        const data = await nfResponse.json();
+        return this.parseResponse(data);
       }
     } catch (e) {
-      console.log('Allorigins error:', e.message);
+      console.log('Netlify function failed:', e.message);
     }
 
-    throw new Error('Unable to connect to KiloCode API. Please check your API key and try again.');
+    throw new Error('All connection methods failed. Please run the app locally or set up a custom proxy.');
   }
 
   buildMessages(history, currentPrompt) {
