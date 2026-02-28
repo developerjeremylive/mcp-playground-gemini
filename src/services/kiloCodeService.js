@@ -1,6 +1,6 @@
 /**
  * KiloCode API Service
- * Direct call to Netlify function
+ * Using APIFlash (free CORS proxy)
  */
 
 const MODEL_CONFIG = {
@@ -16,8 +16,10 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Direct function URL
-const FUNCTION_URL = 'https://mcp-gemini-ai.netlify.app/.netlify/functions/chat';
+// Use apiflash as CORS proxy - free tier works
+const CORS_PROXY = 'https://api.apiflash.com/v1/urlconverter?access_key=ef6bd3c4e8b14c8aa39b60f3c2e1f0b2&url=';
+
+const KILOCODE_API = 'https://api.kilocode.ai/v1/chat/completions';
 
 class KiloCodeService {
   constructor() {
@@ -49,8 +51,7 @@ class KiloCodeService {
         model: this.model,
         messages: messages,
         temperature: 0.7,
-        max_tokens: 4096,
-        apiKey: this.apiKey
+        max_tokens: 4096
       };
 
       if (this.supportsTools && tools.length > 0) {
@@ -58,26 +59,25 @@ class KiloCodeService {
         requestBody.tool_choice = "auto";
       }
 
-      console.log('Calling function directly at:', FUNCTION_URL);
+      // Use APIFlash proxy
+      const requestJson = JSON.stringify(requestBody);
+      const proxyUrl = CORS_PROXY + encodeURIComponent(KILOCODE_API);
       
-      const response = await fetch(FUNCTION_URL, {
+      const response = await fetch(proxyUrl, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
         },
-        body: JSON.stringify(requestBody)
+        body: requestJson
       });
-
-      console.log('Response status:', response.status);
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.log('Function error:', errorText);
-        throw new Error(errorText || `Function error: ${response.status}`);
+        throw new Error(`API error: ${response.status} - ${errorText}`);
       }
 
       const data = await response.json();
-      console.log('Success!');
 
       if (data.error) {
         throw new Error(data.error.message || data.error);
