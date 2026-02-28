@@ -1,6 +1,6 @@
 /**
  * Gemini API Service
- * Handles communication with Google's Gemini API
+ * Handles communication with Google's Gemini API via REST
  */
 
 const GEMINI_API_KEY = 'AIzaSyDu9pmFF4pL-CcNjZWIPu7WgCz14vTG5bA';
@@ -122,16 +122,6 @@ class GeminiService {
     }
 
     return result;
-  }
-
-  /**
-   * Stream generate content (for future use)
-   */
-  async* streamGenerateContent(prompt, tools = [], conversationHistory = []) {
-    // Note: Streaming not fully supported with tools in Gemini
-    // Fallback to non-streaming
-    const result = await this.generateContent(prompt, tools, conversationHistory);
-    yield result;
   }
 }
 
