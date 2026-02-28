@@ -1,26 +1,33 @@
+// Netlify function - handle all CORS preflight
 exports.handler = async (event, context) => {
-  // CORS headers
+  // Always include CORS headers
   const headers = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS'
   };
 
   // Handle preflight
   if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' };
+    return { 
+      statusCode: 200, 
+      headers,
+      body: ''
+    };
   }
 
-  // Only allow POST
+  // Only process POST for API
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) };
+    return { 
+      statusCode: 405, 
+      headers, 
+      body: JSON.stringify({ error: 'Use POST method' }) 
+    };
   }
 
   try {
     const body = JSON.parse(event.body || '{}');
     const { messages, model, tools, apiKey } = body;
-    
-    console.log('Received request, apiKey present:', !!apiKey);
     
     if (!apiKey) {
       return { 
@@ -38,18 +45,9 @@ exports.handler = async (event, context) => {
     };
 
     if (tools && tools.length > 0) {
-      requestBody.tools = tools.map(tool => ({
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters || { type: 'object', properties: {}, required: [] }
-        }
-      }));
+      requestBody.tools = tools;
       requestBody.tool_choice = "auto";
     }
-
-    console.log('Forwarding to KiloCode API...');
 
     const response = await fetch('https://api.kilocode.ai/v1/chat/completions', {
       method: 'POST',
@@ -61,7 +59,6 @@ exports.handler = async (event, context) => {
     });
 
     const responseText = await response.text();
-    console.log('KiloCode response status:', response.status);
 
     if (!response.ok) {
       return { 
@@ -78,7 +75,6 @@ exports.handler = async (event, context) => {
       body: JSON.stringify(data)
     };
   } catch (error) {
-    console.error('Function error:', error);
     return { 
       statusCode: 500, 
       headers,
