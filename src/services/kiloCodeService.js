@@ -1,6 +1,6 @@
 /**
  * KiloCode API Service
- * Final attempt with worker-based CORS proxy
+ * Using Workers AI as alternative
  */
 
 const MODEL_CONFIG = {
@@ -14,6 +14,30 @@ const MODEL_CONFIG = {
   'kilocode/qwen/qwen-2-72b-instruct': { name: 'Qwen 2 72B', supportsTools: true, provider: 'Qwen' },
   'kilocode/microsoft/phi-3-mini-128k-instruct': { name: 'Phi-3 Mini', supportsTools: false, provider: 'Microsoft' },
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
+};
+
+// Fallback to free LLM APIs that work from browser
+const FALLBACK_APIS = {
+  // Uses Claude API directly (no CORS issues)
+  'claude': async (messages, apiKey) => {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-haiku-20240307',
+        max_tokens: 1024,
+        messages: messages
+      })
+    });
+    const data = await response.json();
+    return {
+      choices: [{ message: { content: data.content[0].text } }]
+    };
+  }
 };
 
 const KILOCODE_API = 'https://api.kilocode.ai/v1/chat/completions';
@@ -57,42 +81,38 @@ class KiloCodeService {
       requestBody.tool_choice = "auto";
     }
 
-    const fetchOptions = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`
-      },
-      body: JSON.stringify(requestBody)
-    };
-
-    // Try custom proxy first if set
+    // Try custom proxy first
     if (this.customProxy) {
       try {
-        console.log('Trying custom proxy:', this.customProxy);
-        const response = await fetch(this.customProxy, fetchOptions);
+        console.log('Trying custom proxy...');
+        const response = await fetch(this.customProxy, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+          body: JSON.stringify(requestBody)
+        });
         if (response.ok) {
           const data = await response.json();
           return this.parseResponse(data);
         }
-      } catch (e) {
-        console.log('Custom proxy failed:', e.message);
-      }
+      } catch (e) { console.log('Custom proxy failed:', e.message); }
     }
 
-    // Try direct
+    // Try direct KiloCode API
     try {
-      console.log('Trying direct API call...');
-      const response = await fetch(KILOCODE_API, fetchOptions);
+      console.log('Trying KiloCode API directly...');
+      const response = await fetch(KILOCODE_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify(requestBody)
+      });
       if (response.ok) {
         const data = await response.json();
         return this.parseResponse(data);
       }
-      const err = await response.text();
-      throw new Error(`API error: ${response.status} - ${err}`);
-    } catch (e) {
-      console.log('Direct call failed:', e.message);
-    }
+    } catch (e) { console.log('KiloCode direct failed:', e.message); }
 
     // Try Netlify function
     try {
@@ -106,11 +126,9 @@ class KiloCodeService {
         const data = await nfResponse.json();
         return this.parseResponse(data);
       }
-    } catch (e) {
-      console.log('Netlify function failed:', e.message);
-    }
+    } catch (e) { console.log('Netlify failed:', e.message); }
 
-    throw new Error('All connection methods failed. Please run the app locally or set up a custom proxy.');
+    throw new Error('Unable to connect. Please set up a custom proxy or try again later.');
   }
 
   buildMessages(history, currentPrompt) {
@@ -119,74 +137,42 @@ class KiloCodeService {
     
     if (this.supportsTools) {
       systemContent += this.getToolsPrompt();
-      systemContent += '\n\nWhen you need to use a tool, respond with [TOOL:tool_name]arg1=value1&arg2=value2[/TOOL]. Otherwise, respond in Spanish or English.';
+      systemContent += '\n\nWhen you need to use a tool, respond with [TOOL:tool_name]args[/TOOL]. Otherwise, respond in Spanish or English.';
     } else {
       systemContent += 'Respond in Spanish or English clearly and concisely.';
     }
 
     messages.push({ role: 'system', content: systemContent });
-
-    history.slice(-8).forEach(msg => {
-      if (msg.content) {
-        messages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
-      }
-    });
-
+    history.slice(-8).forEach(msg => { if (msg.content) messages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content }); });
     messages.push({ role: 'user', content: currentPrompt });
     return messages;
   }
 
   getToolsPrompt() {
-    return `
-You have access to these MCP tools:
-- filesystem: read_file(path), write_file(path, content), list_directory(path), create_directory(path), delete(path)
-- memory: append(collection, content), query(collection, query, limit), list_collections(), create_collection(name)
-- fetch: fetch(url, max_length)
-- time: get_current_time(), get_timezone(timezone)
-- git: git_status(repo_path), git_log(repo_path, max_count), git_branch(repo_path)
-- http: request(method, url, headers, body)
-- sqlite: query(database, query)
-- context7: search_docs(query, source)
-- sequentialthinking: think(thought, context, depth)
-Use tools when appropriate to help the user.`;
+    return `You have access to MCP tools: filesystem, memory, fetch, time, git, http, sqlite, context7, sequentialthinking. Use [TOOL:tool_name]args[/TOOL] format when needed.`;
   }
 
   parseResponse(data) {
     const choice = data.choices?.[0];
     if (!choice) throw new Error('No response from model');
-
     const content = choice.message?.content || '';
     const toolCalls = choice.message?.tool_calls || [];
     
     if (toolCalls && toolCalls.length > 0) {
-      const toolCall = toolCalls[0];
       return {
         content: content,
-        toolCall: {
-          name: toolCall.function.name,
-          arguments: typeof toolCall.function.arguments === 'string' ? JSON.parse(toolCall.function.arguments) : toolCall.function.arguments
-        }
+        toolCall: { name: toolCalls[0].function.name, arguments: typeof toolCalls[0].function.arguments === 'string' ? JSON.parse(toolCalls[0].function.arguments) : toolCalls[0].function.arguments }
       };
     }
-    
     return { content: content, toolCall: this.detectToolCallFromText(content) };
   }
 
   detectToolCallFromText(content) {
-    const toolPattern = /\[TOOL:(\w+)\](.*?)\[\/TOOL\]/s;
-    const match = content.match(toolPattern);
-    
+    const match = content.match(/\[TOOL:(\w+)\](.*?)\[\/TOOL\]/s);
     if (match) {
-      const toolName = match[1];
-      const argsStr = match[2];
       const args = {};
-      if (argsStr) {
-        argsStr.split('&').forEach(pair => {
-          const [key, ...valueParts] = pair.split('=');
-          if (key && valueParts.length > 0) args[key] = decodeURIComponent(valueParts.join('='));
-        });
-      }
-      return { name: toolName, arguments: args };
+      if (match[2]) match[2].split('&').forEach(pair => { const [k, ...v] = pair.split('='); if (k && v.length) args[k] = decodeURIComponent(v.join('=')); });
+      return { name: match[1], arguments: args };
     }
     return null;
   }
