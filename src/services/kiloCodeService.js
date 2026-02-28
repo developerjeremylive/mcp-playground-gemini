@@ -11,53 +11,53 @@ const MODEL_CONFIG = {
   'kilocode/anthropic/claude-opus-4.6': {
     name: 'Claude Opus',
     supportsTools: true,
-    provider: 'anthropic'
+    provider: 'Anthropic'
   },
   'kilocode/anthropic/claude-sonnet-4.6': {
     name: 'Claude Sonnet',
     supportsTools: true,
-    provider: 'anthropic'
+    provider: 'Anthropic'
   },
   'kilocode/anthropic/claude-haiku-3.5': {
     name: 'Claude Haiku',
     supportsTools: true,
-    provider: 'anthropic'
+    provider: 'Anthropic'
   },
   'kilocode/google/gemini-pro-1.5': {
     name: 'Gemini Pro 1.5',
     supportsTools: true,
-    provider: 'google'
+    provider: 'Google'
   },
   'kilocode/google/gemini-flash-1.5': {
     name: 'Gemini Flash 1.5',
     supportsTools: true,
-    provider: 'google'
+    provider: 'Google'
   },
   'kilocode/meta-llama/llama-3.1-70b-instruct': {
     name: 'Llama 3.1 70B',
     supportsTools: true,
-    provider: 'meta'
+    provider: 'Meta'
   },
   'kilocode/meta-llama/llama-3.1-8b-instruct': {
     name: 'Llama 3.1 8B',
     supportsTools: true,
-    provider: 'meta'
+    provider: 'Meta'
+  },
+  'kilocode/qwen/qwen-2-72b-instruct': {
+    name: 'Qwen 2 72B',
+    supportsTools: true,
+    provider: 'Qwen'
   },
   // Chat-only models
   'kilocode/microsoft/phi-3-mini-128k-instruct': {
     name: 'Phi-3 Mini',
     supportsTools: false,
-    provider: 'microsoft'
+    provider: 'Microsoft'
   },
   'kilocode/mistralai/mistral-7b-instruct-v0.2': {
     name: 'Mistral 7B',
     supportsTools: false,
-    provider: 'mistralai'
-  },
-  'kilocode/qwen/qwen-2-72b-instruct': {
-    name: 'Qwen 2 72B',
-    supportsTools: true,
-    provider: 'qwen'
+    provider: 'Mistral'
   }
 };
 
@@ -65,6 +65,15 @@ class KiloCodeService {
   constructor() {
     this.model = 'kilocode/anthropic/claude-haiku-3.5';
     this.supportsTools = true;
+    this.apiKey = '';
+  }
+
+  setApiKey(key) {
+    this.apiKey = key;
+  }
+
+  getApiKey() {
+    return this.apiKey;
   }
 
   setModel(modelName) {
@@ -92,6 +101,10 @@ class KiloCodeService {
    * Generate content with MCP tool detection
    */
   async generateContent(prompt, tools = [], conversationHistory = []) {
+    if (!this.apiKey) {
+      throw new Error('API Key not configured. Please add your KiloCode API key in Settings.');
+    }
+
     try {
       const messages = this.buildMessages(conversationHistory, prompt);
       
@@ -114,7 +127,7 @@ class KiloCodeService {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': 'Bearer free'
+            'Authorization': `Bearer ${this.apiKey}`
           },
           body: JSON.stringify(requestBody)
         }
@@ -123,7 +136,12 @@ class KiloCodeService {
       if (!response.ok) {
         const errorText = await response.text();
         console.error('KiloCode Error:', response.status, errorText);
-        throw new Error(errorText || `API error: ${response.status}`);
+        try {
+          const errorJson = JSON.parse(errorText);
+          throw new Error(errorJson.error?.message || errorText);
+        } catch (e) {
+          throw new Error(errorText || `API error: ${response.status}`);
+        }
       }
 
       const data = await response.json();

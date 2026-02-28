@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiSend, FiPlus, FiSettings, FiInfo, FiX, FiCpu, FiDatabase, FiClock, FiGlobe, FiFolder, FiLink, FiBook, FiZap } from 'react-icons/fi';
+import { FiSend, FiPlus, FiSettings, FiInfo, FiX, FiCpu, FiDatabase, FiClock, FiGlobe, FiFolder, FiLink, FiBook, FiZap, FiKey } from 'react-icons/fi';
 import { MCPServers } from './config/mcpTools';
 import { kiloCodeService, MODEL_CONFIG } from './services/kiloCodeService';
 import { toolExecutor } from './services/toolExecutor';
@@ -26,6 +26,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedServer, setSelectedServer] = useState(null);
   const [selectedModel, setSelectedModel] = useState('kilocode/anthropic/claude-haiku-3.5');
+  const [apiKey, setApiKey] = useState('');
   const [showSidebar, setShowSidebar] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
@@ -35,11 +36,18 @@ function App() {
 
   const currentModel = MODEL_CONFIG[selectedModel];
   const supportsTools = currentModel?.supportsTools || false;
+  const hasApiKey = apiKey.length > 0;
 
   // Initialize
   useEffect(() => {
-    kiloCodeService.setModel(selectedModel);
+    // Load API key from localStorage
+    const savedApiKey = localStorage.getItem('kilocode_api_key');
+    if (savedApiKey) {
+      setApiKey(savedApiKey);
+      kiloCodeService.setApiKey(savedApiKey);
+    }
     
+    // Load chat history
     const saved = localStorage.getItem('mcp_chat_history');
     if (saved) {
       try {
@@ -58,6 +66,14 @@ function App() {
     }
   }, [messages]);
 
+  // Save API key when changed
+  useEffect(() => {
+    if (apiKey) {
+      localStorage.setItem('kilocode_api_key', apiKey);
+      kiloCodeService.setApiKey(apiKey);
+    }
+  }, [apiKey]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -72,8 +88,32 @@ function App() {
     }
   };
 
+  const handleApiKeyChange = (e) => {
+    const newKey = e.target.value;
+    setApiKey(newKey);
+    localStorage.setItem('kilocode_api_key', newKey);
+    kiloCodeService.setApiKey(newKey);
+  };
+
+  const clearApiKey = () => {
+    setApiKey('');
+    localStorage.removeItem('kilocode_api_key');
+    kiloCodeService.setApiKey('');
+  };
+
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
+
+    if (!hasApiKey) {
+      setMessages(prev => [...prev, {
+        id: Date.now(),
+        role: 'assistant',
+        content: '⚠️ Please configure your KiloCode API key in the "API Key" tab first.',
+        timestamp: new Date().toISOString(),
+        isError: true
+      }]);
+      return;
+    }
 
     const userMessage = input.trim();
     setInput('');
@@ -229,6 +269,14 @@ function App() {
               </div>
             </div>
 
+            {/* API Key Status */}
+            <div className="p-3 border-b border-gpt-border">
+              <div className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg ${hasApiKey ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                <FiKey />
+                {hasApiKey ? 'API Key configured' : 'API Key missing'}
+              </div>
+            </div>
+
             {/* Model Selector */}
             <div className="p-3 border-b border-gpt-border">
               <label className="block text-xs text-gray-500 mb-1">AI Model</label>
@@ -271,21 +319,27 @@ function App() {
             <div className="flex border-b border-gpt-border">
               <button
                 onClick={() => setActiveTab('servers')}
-                className={`flex-1 py-2 text-sm font-medium ${activeTab === 'servers' ? 'text-gpt-accent border-b-2 border-gpt-accent' : 'text-gray-400'}`}
+                className={`flex-1 py-2 text-xs font-medium ${activeTab === 'servers' ? 'text-gpt-accent border-b-2 border-gpt-accent' : 'text-gray-400'}`}
               >
                 Servers
               </button>
               <button
                 onClick={() => setActiveTab('models')}
-                className={`flex-1 py-2 text-sm font-medium ${activeTab === 'models' ? 'text-gpt-accent border-b-2 border-gpt-accent' : 'text-gray-400'}`}
+                className={`flex-1 py-2 text-xs font-medium ${activeTab === 'models' ? 'text-gpt-accent border-b-2 border-gpt-accent' : 'text-gray-400'}`}
               >
                 Models
               </button>
+              <button
+                onClick={() => setActiveTab('apikey')}
+                className={`flex-1 py-2 text-xs font-medium ${activeTab === 'apikey' ? 'text-gpt-accent border-b-2 border-gpt-accent' : 'text-gray-400'}`}
+              >
+                API Key
+              </button>
             </div>
 
-            {/* Server List */}
+            {/* Tab Content */}
             <div className="flex-1 overflow-y-auto p-2">
-              {activeTab === 'servers' ? (
+              {activeTab === 'servers' && (
                 <>
                   <div className="px-2 py-1 text-xs text-gray-500 uppercase font-medium">MCP Servers</div>
                   {Object.entries(MCPServers).map(([id, server]) => {
@@ -309,7 +363,9 @@ function App() {
                     );
                   })}
                 </>
-              ) : (
+              )}
+
+              {activeTab === 'models' && (
                 <div className="space-y-2">
                   <div className="px-2 py-1 text-xs text-gray-500 uppercase font-medium">With MCP</div>
                   {modelsWithTools.map(([key, model]) => (
@@ -326,6 +382,40 @@ function App() {
                       <div className="text-xs text-gray-500">{model.provider}</div>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {activeTab === 'apikey' && (
+                <div className="space-y-4 p-2">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">KiloCode API Key</label>
+                    <input
+                      type="password"
+                      value={apiKey}
+                      onChange={handleApiKeyChange}
+                      placeholder="Enter your API key..."
+                      className="w-full bg-gpt-tertiary border border-gpt-border rounded-lg px-3 py-2 text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-2">
+                      Get your API key from <a href="https://kilocode.ai" target="_blank" rel="noopener" className="text-gpt-accent hover:underline">kilocode.ai</a>
+                    </p>
+                  </div>
+                  {hasApiKey && (
+                    <div className="bg-green-500/20 border border-green-500/30 rounded-lg p-3">
+                      <div className="text-sm text-green-400">✓ API Key saved</div>
+                      <div className="text-xs text-gray-400 mt-1">
+                        Key: {apiKey.substring(0, 8)}...{apiKey.substring(apiKey.length - 4)}
+                      </div>
+                    </div>
+                  )}
+                  {apiKey && (
+                    <button
+                      onClick={clearApiKey}
+                      className="w-full py-2 text-sm text-red-400 hover:text-red-300 border border-red-500/30 rounded-lg"
+                    >
+                      Remove API Key
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -364,8 +454,8 @@ function App() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <span className={`text-xs px-2 py-1 rounded-full ${supportsTools ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400'}`}>
-              {supportsTools ? '✓ MCP Enabled' : 'Chat Only'}
+            <span className={`text-xs px-2 py-1 rounded-full ${hasApiKey ? (supportsTools ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400') : 'bg-red-500/20 text-red-400'}`}>
+              {!hasApiKey ? '⚠️ No API Key' : (supportsTools ? '✓ MCP Enabled' : 'Chat Only')}
             </span>
             <button onClick={() => setShowAbout(true)} className="p-2 hover:bg-gpt-hover rounded-lg">
               <FiInfo />
@@ -381,11 +471,27 @@ function App() {
                 ⚡
               </div>
               <h2 className="text-2xl font-semibold mb-2">MCP Playground</h2>
-              <p className="text-gray-400 max-w-md">
-                Select a <span className="text-gpt-accent">KiloCode model</span> with ✓ for MCP tools.
-                <br/>
-                Models without ✓ are chat-only.
+              <p className="text-gray-400 max-w-md mb-4">
+                {!hasApiKey ? (
+                  <>
+                    Please configure your <span className="text-gpt-accent">KiloCode API key</span> in the sidebar first.
+                  </>
+                ) : (
+                  <>
+                    Select a <span className="text-gpt-accent">model</span> with ✓ for MCP tools.
+                    <br/>
+                    Models without ✓ are chat-only.
+                  </>
+                )}
               </p>
+              {!hasApiKey && (
+                <button
+                  onClick={() => setActiveTab('apikey')}
+                  className="px-4 py-2 bg-gpt-accent hover:bg-gpt-accent-hover rounded-lg"
+                >
+                  Configure API Key
+                </button>
+              )}
             </div>
           ) : (
             messages.map((msg) => (
@@ -448,24 +554,27 @@ function App() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder={supportsTools 
-                  ? (selectedServer ? `Message ${MCPServers[selectedServer]?.name}...` : 'Select a server or ask anything...')
-                  : 'Chat only mode...'
+                placeholder={!hasApiKey 
+                  ? 'Configure API key first...' 
+                  : (supportsTools 
+                    ? (selectedServer ? `Message ${MCPServers[selectedServer]?.name}...` : 'Select a server or ask anything...')
+                    : 'Chat only mode...')
                 }
+                disabled={!hasApiKey}
                 rows={1}
-                className="w-full bg-gpt-tertiary border border-gpt-border rounded-xl px-4 py-3 pr-12 resize-none outline-none focus:border-gpt-accent"
+                className="w-full bg-gpt-tertiary border border-gpt-border rounded-xl px-4 py-3 pr-12 resize-none outline-none focus:border-gpt-accent disabled:opacity-50"
                 style={{ minHeight: '52px', maxHeight: '200px' }}
               />
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || isLoading}
-                className="absolute right-2 bottom-2 p-2 bg-gpt-accent hover:bg-gpt-accent-hover disabled:bg-gpt-hover rounded-lg"
+                disabled={!input.trim() || isLoading || !hasApiKey}
+                className="absolute right-2 bottom-2 p-2 bg-gpt-accent hover:bg-gpt-accent-hover disabled:bg-gpt-hover disabled:cursor-not-allowed rounded-lg"
               >
                 <FiSend className="text-white" />
               </button>
             </div>
             <div className="text-center text-xs text-gray-500 mt-2">
-              {currentModel?.name} · {supportsTools ? 'MCP Enabled' : 'Chat Only'}
+              {currentModel?.name} · {!hasApiKey ? 'API Key required' : (supportsTools ? 'MCP Enabled' : 'Chat Only')}
             </div>
           </div>
         </div>
@@ -491,7 +600,17 @@ function App() {
                   </optgroup>
                 </select>
               </div>
-              <button onClick={() => { localStorage.clear(); setMessages([]); }} className="text-sm text-red-400 hover:text-red-300">Clear all data</button>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">API Key</label>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={handleApiKeyChange}
+                  placeholder="KiloCode API Key"
+                  className="w-full bg-gpt-tertiary border border-gpt-border rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <button onClick={() => { localStorage.clear(); setMessages([]); setApiKey(''); }} className="text-sm text-red-400 hover:text-red-300">Clear all data</button>
             </div>
           </div>
         </div>
@@ -515,6 +634,7 @@ function App() {
                 <li>✓ <strong>Claude, Gemini, Llama, Qwen</strong> - Support MCP tools</li>
                 <li>○ <strong>Phi-3, Mistral</strong> - Chat only</li>
               </ul>
+              <p className="text-xs text-gray-500 pt-2">Requires KiloCode API key</p>
             </div>
           </div>
         </div>
