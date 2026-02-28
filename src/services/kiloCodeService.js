@@ -1,6 +1,6 @@
 /**
  * KiloCode API Service
- * Direct call to Netlify function
+ * Uses corsproxy.io to avoid CORS issues
  */
 
 const MODEL_CONFIG = {
@@ -16,8 +16,9 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Always use the Netlify function URL directly
-const PROXY_URL = '/.netlify/functions/chat';
+// Use corsproxy.io to bypass CORS
+const CORS_PROXY = 'https://corsproxy.io/?';
+const KILOCODE_API = 'https://api.kilocode.ai/v1/chat/completions';
 
 class KiloCodeService {
   constructor() {
@@ -49,23 +50,34 @@ class KiloCodeService {
         model: this.model,
         messages: messages,
         temperature: 0.7,
-        max_tokens: 4096,
-        apiKey: this.apiKey
+        max_tokens: 4096
       };
 
       if (this.supportsTools && tools.length > 0) {
         requestBody.tools = tools;
+        requestBody.tool_choice = "auto";
       }
 
-      const response = await fetch(PROXY_URL, {
+      // Use CORS proxy
+      const proxyUrl = CORS_PROXY + encodeURIComponent(KILOCODE_API);
+      
+      const response = await fetch(proxyUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
         body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || `API error: ${response.status}`);
+        const errorText = await response.text();
+        let errorMsg = `API error: ${response.status}`;
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMsg = errorJson.error?.message || errorJson.error || errorMsg;
+        } catch (e) {}
+        throw new Error(errorMsg);
       }
 
       const data = await response.json();
