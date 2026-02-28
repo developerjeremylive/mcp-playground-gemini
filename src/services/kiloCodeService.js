@@ -1,6 +1,6 @@
 /**
  * KiloCode API Service
- * Using APIFlash (free CORS proxy)
+ * Using CodeTabs proxy
  */
 
 const MODEL_CONFIG = {
@@ -16,8 +16,11 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Use apiflash as CORS proxy - free tier works
-const CORS_PROXY = 'https://api.apiflash.com/v1/urlconverter?access_key=ef6bd3c4e8b14c8aa39b60f3c2e1f0b2&url=';
+// Try multiple approaches
+const PROXY_ENDPOINTS = [
+  { url: 'https://api.allorigins.win/raw?url=', encode: true },
+  { url: 'https://corsproxy.io/?', encode: true }
+];
 
 const KILOCODE_API = 'https://api.kilocode.ai/v1/chat/completions';
 
@@ -44,24 +47,47 @@ class KiloCodeService {
       throw new Error('API Key not configured. Please add your KiloCode API key in Settings.');
     }
 
+    const messages = this.buildMessages(conversationHistory, prompt);
+    
+    const requestBody = {
+      model: this.model,
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: 4096
+    };
+
+    if (this.supportsTools && tools.length > 0) {
+      requestBody.tools = tools;
+      requestBody.tool_choice = "auto";
+    }
+
+    // Try direct call first
     try {
-      const messages = this.buildMessages(conversationHistory, prompt);
-      
-      const requestBody = {
-        model: this.model,
-        messages: messages,
-        temperature: 0.7,
-        max_tokens: 4096
-      };
+      console.log('Trying direct call...');
+      const response = await fetch(KILOCODE_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify(requestBody)
+      });
 
-      if (this.supportsTools && tools.length > 0) {
-        requestBody.tools = tools;
-        requestBody.tool_choice = "auto";
+      if (response.ok) {
+        const data = await response.json();
+        return this.parseResponse(data);
       }
+      console.log('Direct call failed:', response.status);
+    } catch (e) {
+      console.log('Direct call error:', e.message);
+    }
 
-      // Use APIFlash proxy
-      const requestJson = JSON.stringify(requestBody);
-      const proxyUrl = CORS_PROXY + encodeURIComponent(KILOCODE_API);
+    // Try with allorigins proxy
+    try {
+      console.log('Trying allorigins proxy...');
+      const proxyUrl = PROXY_ENDPOINTS[0].encode 
+        ? PROXY_ENDPOINTS[0].url + encodeURIComponent(KILOCODE_API)
+        : PROXY_ENDPOINTS[0].url + KILOCODE_API;
       
       const response = await fetch(proxyUrl, {
         method: 'POST',
@@ -69,25 +95,23 @@ class KiloCodeService {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`
         },
-        body: requestJson
+        body: JSON.stringify(requestBody)
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`API error: ${response.status} - ${errorText}`);
+      if (response.ok) {
+        const text = await response.text();
+        try {
+          const data = JSON.parse(text);
+          return this.parseResponse(data);
+        } catch (e) {
+          console.log('Failed to parse response:', text.substring(0, 100));
+        }
       }
-
-      const data = await response.json();
-
-      if (data.error) {
-        throw new Error(data.error.message || data.error);
-      }
-
-      return this.parseResponse(data);
-    } catch (error) {
-      console.error('KiloCode Error:', error);
-      throw error;
+    } catch (e) {
+      console.log('Allorigins error:', e.message);
     }
+
+    throw new Error('Unable to connect to KiloCode API. Please check your API key and try again.');
   }
 
   buildMessages(history, currentPrompt) {
