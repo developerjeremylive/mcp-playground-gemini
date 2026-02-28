@@ -173,8 +173,8 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  = (e) => {
-    if (e.key === const handleKeyPress 'Enter' && !e.shiftKey) {
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
