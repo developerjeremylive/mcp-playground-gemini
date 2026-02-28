@@ -3,7 +3,7 @@
  * Handles communication with Google's Gemini API via REST
  */
 
-const GEMINI_API_KEY = 'AIzaSyDu9pmFF4pL-CcNjZWIPu7WgCz14vTG5bA';
+const GEMINI_API_KEY = 'AIzaSyAfyIK5lscHhD4_tjcgEPKv-2TCgJWrpyk';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 class GeminiService {
