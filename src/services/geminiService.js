@@ -9,7 +9,7 @@ const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 class GeminiService {
   constructor(apiKey = GEMINI_API_KEY) {
     this.apiKey = apiKey;
-    this.model = 'gemini-1.5-flash';
+    this.model = 'gemini-3-flash-preview';
   }
 
   /**
