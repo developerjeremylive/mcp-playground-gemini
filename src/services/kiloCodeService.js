@@ -15,20 +15,22 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Use Cloudflare Worker proxy
-const PROXY_URL = 'https://kilo.etheroi.com/v1/chat/completions';
+// Default Cloudflare Worker proxy - user can override in settings
+const DEFAULT_PROXY = 'https://kilo.etheroi.com/v1/chat/completions';
 
 class KiloCodeService {
   constructor() {
     this.model = 'kilocode/anthropic/claude-haiku-3.5';
     this.supportsTools = true;
     this.apiKey = '';
-    this.customProxy = '';
+    this.customProxy = DEFAULT_PROXY; // Default to Cloudflare worker
   }
 
   setApiKey(key) { this.apiKey = key; }
   getApiKey() { return this.apiKey; }
-  setCustomProxy(url) { this.customProxy = url; }
+  setCustomProxy(url) { this.customProxy = url || DEFAULT_PROXY; }
+  getCustomProxy() { return this.customProxy; }
+  
   setModel(modelName) {
     this.model = modelName;
     const config = MODEL_CONFIG[modelName] || { supportsTools: false };
@@ -57,11 +59,9 @@ class KiloCodeService {
       requestBody.tool_choice = "auto";
     }
 
-    const proxyUrl = this.customProxy || PROXY_URL;
-
     try {
-      console.log('Using proxy:', proxyUrl);
-      const response = await fetch(proxyUrl, {
+      console.log('Calling proxy:', this.customProxy);
+      const response = await fetch(this.customProxy, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -72,13 +72,13 @@ class KiloCodeService {
 
       if (!response.ok) {
         const err = await response.text();
-        throw new Error(`API error: ${response.status} - ${err}`);
+        throw new Error(`Proxy error ${response.status}: ${err.substring(0, 100)}`);
       }
 
       const data = await response.json();
       return this.parseResponse(data);
     } catch (e) {
-      console.error('Proxy error:', e.message);
+      console.error('Error:', e.message);
       throw e;
     }
   }
