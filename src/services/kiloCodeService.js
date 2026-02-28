@@ -15,15 +15,15 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Default Cloudflare Worker proxy - user can override in settings
-const DEFAULT_PROXY = 'https://kilo.etheroi.com/v1/chat/completions';
+// Default Cloudflare Worker proxy - uses workers.dev subdomain
+const DEFAULT_PROXY = 'https://kilocode-proxy.b7a628f29ce7b9e4d28128bf5b4442b6.workers.dev/v1/chat/completions';
 
 class KiloCodeService {
   constructor() {
     this.model = 'kilocode/anthropic/claude-haiku-3.5';
     this.supportsTools = true;
     this.apiKey = '';
-    this.customProxy = DEFAULT_PROXY; // Default to Cloudflare worker
+    this.customProxy = DEFAULT_PROXY;
   }
 
   setApiKey(key) { this.apiKey = key; }
