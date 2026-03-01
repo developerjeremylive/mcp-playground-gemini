@@ -15,8 +15,8 @@ const MODEL_CONFIG = {
   'kilocode/mistralai/mistral-7b-instruct-v0.2': { name: 'Mistral 7B', supportsTools: false, provider: 'Mistral' }
 };
 
-// Cloudflare Worker URL
-const DEFAULT_PROXY = 'https://kilocode-proxy-live.developerjeremylive.workers.dev';
+// Cloudflare Worker URL with full path
+const DEFAULT_PROXY = 'https://kilocode-proxy-live.developerjeremylive.workers.dev/v1/chat/completions';
 
 class KiloCodeService {
   constructor() {
